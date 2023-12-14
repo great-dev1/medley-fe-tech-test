@@ -1,6 +1,11 @@
-import React, { useState, useEffect } from 'react';
-import axios from 'axios';
-import styled, { createGlobalStyle } from 'styled-components';
+import React, { useState, useEffect, useCallback } from 'react';
+import styled from 'styled-components';
+import { useDebounce } from "react-use";
+import useFetchFilteredPayouts from "./helpers/hooks/useFetchFilteredPayout";
+import useFetchPayouts from "./helpers/hooks/useFetchPayouts";
+import { DEFAULT_META_DATA } from "./helpers/constants";
+import { Metadata, Payout } from "./helpers/type";
+import moment from 'moment'
 
 const Title = styled.h1`
   font-size: 2.5em;
@@ -86,6 +91,8 @@ const Table = styled.table`
   margin-bottom: 1rem;
   vertical-align: top;
   border-collapse: collapse;
+  border-radius: .2rem;
+  overflow: hidden;
 `
 const Thead = styled.thead``
 const Tbody = styled.tbody``
@@ -136,56 +143,82 @@ const Badge = styled.span<{status?: string;}>`
   min-width: 100px;
 `
 
-interface Payout {
-  dateAndTime: string;
-  status: string;
-  value: string;
-  username: string;
-}
-
-interface Metadata {
-  page: number;
-  limit: number;
-  totalCount: number;
-}
-
 const PayoutHistoryPage: React.FC = () => {
-  const [payouts, setPayouts] = useState<Payout[]>([]);
-  const [metadata, setMetadata] = useState<Metadata>({ page: 1, limit: 10, totalCount: 0 });
-  const [searchTerm, setSearchTerm] = useState('');
-  const [isSearch, setIsSearch] = useState(false);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [displayData, setDisplayData] = useState<Payout[]>([]);
+  const [displayMeta, setDisplayMeta] = useState<Metadata>(DEFAULT_META_DATA);
+  const [currentPage, setCurrentPage] = useState(0);
+  const [pagelimt, setPageLimit] = useState(10);
+  const { fetchFilteredPayouts, fetchMore, filteredPayouts, filteredMetadata } =
+    useFetchFilteredPayouts();
+  const { fetchPayouts, payouts, metadata } = useFetchPayouts();
 
   useEffect(() => {
-    // Fetch payouts based on search criteria
-    const fetchPayouts = async () => {
-      try {
-        const response = await axios.get('https://theseus-staging.lithium.ventures/api/v1/analytics/tech-test/payouts', {
-          params: {
-            page: metadata.page,
-            limit: metadata.limit,
-            totalCount: metadata.totalCount,
-          },
-        });
-        setPayouts(response.data.data);
-        setMetadata(response.data.metadata);
-      } catch (error) {
-        console.error('Error fetching payouts:', error);
-      }
-    };
+    fetchPayouts(0, pagelimt);
+  }, [fetchPayouts, fetchFilteredPayouts, pagelimt]);
 
-    fetchPayouts();
-  }, [metadata.page]);
+  useDebounce(
+    () => {
+      if (searchTerm.length > 0) fetchFilteredPayouts(searchTerm, pagelimt);
+      else fetchPayouts(1, pagelimt);
+    },
+    1000,
+    [searchTerm]
+  );
 
+  useDebounce(
+    () => {
+      if (!searchTerm.length) fetchPayouts(currentPage, pagelimt);
+      else fetchMore(currentPage, pagelimt);
+    },
+    1000,
+    [currentPage]
+  );
 
-  const handlePageChange = (newPage: number) => {
-    setMetadata({ ...metadata, page: newPage });
-  };
+  useDebounce(
+    () => {
+      if (!searchTerm.length) fetchPayouts(currentPage, pagelimt);
+      else fetchMore(currentPage, pagelimt);
+    },
+    500,
+    [pagelimt]
+  );
 
-  const handleSearchClick = () => {
-    setIsSearch(true);
-    // Trigger API request for search when the search Button is clicked
-    setMetadata({ ...metadata, page: 1 }); // Reset pagination to first page
-  };
+  const handleSearchChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      setSearchTerm(e.target.value);
+    },
+    []
+  );
+
+  useEffect(() => {
+    setDisplayData(payouts);
+  }, [payouts]);
+
+  useEffect(() => {
+    setDisplayData(filteredPayouts);
+  }, [filteredPayouts]);
+
+  useEffect(() => {
+    setDisplayMeta(metadata);
+  }, [metadata]);
+
+  useEffect(() => {
+    setDisplayMeta(filteredMetadata);
+  }, [filteredMetadata]);
+
+  const handlePageChange = useCallback((newPage: number) => {
+    setCurrentPage(newPage);
+  }, []);
+
+  const handleLimitChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
+    setPageLimit(parseInt(e.target.value));
+    setCurrentPage(1);
+  }, []);
+
+  const formatDate = (date: string) => {
+    return moment(date).format("YYYY-MM-DD HH:mm");
+  }
 
   return (
     <div>
@@ -194,20 +227,24 @@ const PayoutHistoryPage: React.FC = () => {
         <SubTitle>Payout History</SubTitle>
         {/* Filter section */}
         <Flex>
-          <Select>
-            <option>5</option>
-            <option>10</option>
-            <option>20</option>
-            <option>50</option>
-            <option>100</option>
+          <Select
+            value={pagelimt}
+            onChange={handleLimitChange}
+          >
+            <option value="10">10</option>
+            <option value="20">20</option>
+            <option value="50">50</option>
           </Select>
           <SearchBox>
-            <SearchInput type="text" placeholder="Search by User Name" onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSearchTerm(e.target.value)} />
-            <SearchIcon className='fa fa-search'/>
+            <SearchInput
+              type="text"
+              placeholder="Search by User Name"
+              onChange={handleSearchChange}
+            />
+            <SearchIcon className="fa fa-search" />
           </SearchBox>
         </Flex>
-
-        {/* Payout history table */}
+      {/* Payout history table */}
         <Table>
           <Thead>
             <ThRow>
@@ -218,36 +255,69 @@ const PayoutHistoryPage: React.FC = () => {
             </ThRow>
           </Thead>
           <Tbody>
-            {payouts.map((payout, index) => (
-              <Trow key={index} isEven={index % 2 === 0}>
+            {displayData.length ? displayData.map((payout, index) => (
+              <Trow key={index}>
                 <Td>{payout.username}</Td>
-                <Td>{payout.dateAndTime}</Td>
+                <Td>{formatDate(payout.dateAndTime)}</Td>
                 <Td>
                   <Badge status={payout.status}>
                     {payout.status}
                   </Badge>
                 </Td>
-                <Td>{payout.value}</Td>
+                <Td><b>{payout.value}</b></Td>
               </Trow>
-            ))}
+            )) :
+            <Trow>
+              No data to display
+            </Trow>}
           </Tbody>
         </Table>
-        {/* pagination */}
+
+      {/* Pagination */}
         <Pagination>
           <PageItem>
-            <PageLink isDisable={metadata.page === 1} onClick={() => handlePageChange(1)}>First</PageLink>
+            <PageLink
+              isDisable={displayMeta.page === 1 || displayMeta.totalCount === 0}
+              onClick={() => handlePageChange(1)}
+            >
+              First
+            </PageLink>
           </PageItem>
           <PageItem>
-            <PageLink isDisable={metadata.page === 1} onClick={() => handlePageChange(metadata.page - 1)}>Prev</PageLink>
+            <PageLink
+              isDisable={displayMeta.page === 1 || displayMeta.totalCount === 0}
+              onClick={() => handlePageChange(displayMeta.page - 1)}
+            >
+              Prev
+            </PageLink>
           </PageItem>
           <PageItem>
-            <PageLink isActive={true}>{metadata.page}</PageLink>
+            <PageLink isActive={true}>
+              {displayMeta.page} /{" "}
+              {Math.max(Math.ceil(displayMeta.totalCount / pagelimt), 1)}
+            </PageLink>
           </PageItem>
           <PageItem>
-            <PageLink isDisable={metadata.page === Math.ceil(metadata.totalCount / metadata.limit)} onClick={() => handlePageChange(metadata.page + 1)}>Next</PageLink>
+            <PageLink
+              isDisable={
+                displayMeta.page === Math.ceil(displayMeta.totalCount / pagelimt) || displayMeta.totalCount === 0
+              }
+              onClick={() => handlePageChange(displayMeta.page + 1)}
+            >
+              Next
+            </PageLink>
           </PageItem>
           <PageItem>
-            <PageLink isDisable={metadata.page === Math.ceil(metadata.totalCount / metadata.limit)} onClick={() => handlePageChange(Math.ceil(metadata.totalCount / metadata.limit))}>Last</PageLink>
+            <PageLink
+              isDisable={
+                displayMeta.page === Math.ceil(displayMeta.totalCount / pagelimt) || displayMeta.totalCount === 0
+              }
+              onClick={() =>
+                handlePageChange(Math.ceil(displayMeta.totalCount / pagelimt))
+              }
+            >
+              Last
+            </PageLink>
           </PageItem>
         </Pagination>
       </Container>
